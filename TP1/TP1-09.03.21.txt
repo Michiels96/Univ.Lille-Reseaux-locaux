@@ -1,0 +1,390 @@
+ssh -XC michiels@a16p26.fil.univ-lille1.fr
+
+vstart -D R1 --eth0=a --eth1=b && vstart -D R2 --eth0=a --eth1=A && vstart -D R3 --eth0=b --eth1=B
+
+
+Partie 1
+Pour la partie assignation, j'ai suivi mon shéma d'addressage (shéma-IP.png)
+
+1. assigner des addresses ip static aux interfaces réseau des routeurs
+https://www.tecmint.com/set-add-static-ip-address-in-linux/
+
+dans /etc/network/interfaces de R1:
+auto eth0
+iface eth0 inet static
+address 192.168.0.254
+netmask 255.255.255.0
+
+auto eth1
+iface eth1 inet static
+address 192.168.1.254
+netmask 255.255.255.0
+
+dans /etc/network/interfaces de R2:
+auto eth0
+iface eth0 inet static
+address 192.168.0.1
+netmask 255.255.255.0
+
+auto eth1
+iface eth1 inet static
+address 192.168.2.1
+netmask 255.255.255.0
+
+dans /etc/network/interfaces de R3:
+auto eth0
+iface eth0 inet static
+address 192.168.1.1
+netmask 255.255.255.0
+
+auto eth1
+iface eth1 inet static
+address 192.168.3.1
+netmask 255.255.255.0
+
+redémarrer le service networking:
+'/etc/init.d/networking restart'
+
+ajouter les routes default:
+R1:
+ip route add default via 192.168.1.1
+R2:
+ip route add default via 192.168.0.254
+r3:
+ip route add default via 192.168.1.254
+
+
+
+2. Pour afficher la table de routage:
+'ip route'
+Je remarque que les addresses IP que j'ai hardcodé pour chaque interface de chacun de mes routeurs sont présents
+dans la table de routage. 
+La table n'est pas vide, elle contient déjà les addr IP de chaque interface du routeur.
+La particularité est que ces routes indiquent les réseaux auxquels le routeur est déjà connecté.
+
+3. Pour permettre la transmission des paquets, il faut vérifier que le routage IP est bien activé et ajouter les passerelles par défaut.
+http://www.octetmalin.net/linux/tutoriels/ip-forward.php
+
+R1 est le routeur intermédiaire entre R2 et R3. Le problème c'est que lorsque la passerelle par défaut est mise sur 192.168.1.1 (vers R3),
+il sera impossible de pinger A PARTIR de R3 pour atteindre le réseau 192.168.2.0 de R2 car R1 ne trouvera pas la route par défaut 
+qui devrait être 192.168.0.1 pour y accéder.
+
+Pings fonctionnels avec la config présentée par les images config.png/configBis.png: 
+(Ces images sont les mêmes, c'est juste le '*' dans la colonne 'Gateway' qui représente l'addresse du routeur lui-même)
+
+A partir de R2:
+ping 192.168.2.1
+ping 192.168.0.1
+ping 192.168.0.254
+ping 192.168.1.254
+ping 192.168.1.1
+ping 192.168.3.1
+
+A partir de R3
+ping 192.168.3.1
+ping 192.168.1.1
+ping 192.168.1.254
+ping 192.168.0.254
+ping 192.168.0.1
+
+A partir de R1
+ping 192.168.0.254
+ping 192.168.1.254
+ping 192.168.0.1
+ping 192.168.1.1
+ping 192.168.3.1
+
+
+C'est le problème du (hot) potato routing (http://www.rjsystems.nl/en/2100-adv-routing.php)
+
+
+Il y a quand même une solution à ça: établir des règles de routage.
+Le PC possède plusieurs tables de routages (voir /etc/iproute2/rt_tables)
+ex: 'ip route show table main' qui est la table de routage principale.
+
+commandes pour R1:
+- 'création' de la nouvelle table:
+echo 2 newTable >> /etc/iproute2/rt_tables
+
+- ajouter la nouvelle route default dans la table 'newTable':
+ip route add default via 192.168.0.1 dev eth0 table newTable
+
+- Mise en place d'une règle pour le routage:
+ip rule add from 192.168.1.1 lookup newTable prio 1000
+Ici on va demander à R1 d'aller utiliser la table de routage 'newTable' dès qu'il recoit un paquet 
+en provenance de 192.168.1.1 (interface eth0 de R3, car c'est lui qui n'arrive pas à pinger vers le réseau 192.168.2.0 de R2)
+avec une priorité de 1000.
+(pour visualiser les règles ip, la commande: 'ip rule')
+
+- raffraichir les tables en mémoire:
+ip route flush table cache
+
+Puis à partir de R3 faire:
+'ping 192.168.2.1'
+et ça fonctionne!
+
+
+
+
+
+
+
+
+
+Partie 2
+(plus de détails sur Partie_2_traceroute.png)
+
+- sur R1:
+tcpdump -Uni eth0 -w /hosthome/R1_eth0.cap &
+tcpdump -Uni eth1 -w /hosthome/R1_eth1.cap &
+
+- sur la machine physique (par exemple a13p16):
+tail -f ~/R1_eth0.cap | wireshark -SHkli - &
+tail -f ~/R1_eth1.cap | wireshark -SHkli - &
+
+
+1.
+Depuis R2:
+'traceroute 192.168.3.1'
+affiche:
+traceroute to 192.168.3.1 (192.168.3.1), 64 hops, 40 byte packets
+    1 192.168.0.254 (192.168.0.254) 11ms 0ms 0ms
+    2 192.168.3.1 (192.168.3.1) 16ms 1ms 1ms
+
+2.
+Leurs time to live TTL => 1
+Non, ces paquets n'arrivent pas jusqu'à R3 car le TTL à été dépassé.
+C'est eth0 (192.168.0.254) de R1 qui répond à eth0 (192.168.0.1) de R2 
+en disant que le TTL du paquet qu'il a envoyé précédemment à été dépassé.
+R1 réponds via des paquets de type:
+- protocole: ICMP
+- type: ping (type 3: destination unreachable)
+Sens R1>eth0(192.168.0.254) --> R2>eth0(192.168.0.1)
+
+3.
+Leurs time to live TTL => 2
+Oui, cette fois ci ils parviennent jusqu'à R3 car leur TTL est suffisant.
+Comme R3 à pu être joignable, c'est R3 qui réponds par le biais de R2 à R2
+sens d'envoi R2 --> R1 --> R3
+sens de retour R3 --> R1 --> R2
+
+4.
+Ce sont les paquets ICMP qui indiquent par ou passent les messages pour envoyer le paquet à la bonne destination.
+
+
+
+
+
+Partie 3
+(https://packetlife.net/blog/2008/aug/18/path-mtu-discovery/)
+(https://www.cyberciti.biz/faq/how-can-i-setup-the-mtu-for-my-network-interface/)
+
+1.
+Pour mettre le MTU des les interfaces connectées au réseau B à 1000:
+R1:
+ip link set dev eth1 mtu 1000
+R3:
+ip link set dev eth0 mtu 1000
+
+2.
+vers le réseau 'B'
+Pour spécifier une taille à un datagramme ping, on utilise l'option '-s'
+ping -M dont -s 1200 192.168.3.1
+
+Le ping revois un ICMP type 8 code 0 ce qui indique que la destination à bien été atteignable.
+(plus d'info voir l'image Question_3_MTU_2.png)
+
+NB: la question 2 et 3 me demandent tous les 2 d'utiliser l'option '-M dont', je cosidère que la question 3 me demande d'utiliser '-M do'
+
+3.
+ping -M do -s 1200 192.168.3.1
+
+Cette fois ci, la requète ne parviens pas jusqu'a 192.168.3.1 car le paquet ICMP à son flag 'Dont fragment' à 1 (=> l'option '-M do' de ping).
+De cette manière, au premier routeur rencontré, le routeur ne fragementera pas le datagramme 
+Seulement si le MTU de son interface destination est trop petit par rapport à la taille du datagramme.
+Ce 'non-routage' est uniquement valide si les conditions suivantes sont réunies:
+- MTU de l'interface de destination est trop petit par rapport à la taille du datagramme.
+- Le bit du flag 'Dont fragment' du datagramme est à 1
+
+Le routeur, dans ce cas là, renverra à l'hote qui a envoyé le datagramme un paquet ICMP indiquant que le MTU du datagramme initial est trop grand.
+
+Petite réflexion: Pour deviner le MTU de l'interface bloquant du routeur, 
+on bruteforce des commandes ping en modifiant chacune de celles-ci leur taille '-s' de manière décroissante.
+De cette manière on finira par avoir une commande ping qui arrivera bien à destination et on aura trouvé par ce biais le MTU.
+
+
+4.
+(voir l'image Question_3_MTU_4.png)
+D'abord, les paquets n'atteignent pas leur destination car elles ont un TTL de 1.
+tracepath à su dire qu'un MTU de 1000 existe entre R1 et R3 car le paquet ICMP renvoyé par R1 vers R2 contient cette information (voir l'image Question_3_MTU_4.1.png)
+
+Reset:
+R1:
+ip link set dev eth1 mtu 1500
+R3:
+ip link set dev eth0 mtu 1500
+
+
+
+
+
+Partie 4
+
+R1:
+zebra -d
+ripd -d
+vtysh
+configure terminal
+router rip
+network 192.168.0.0/24
+network 192.168.1.0/24
+exit (fois 3)
+
+
+R2:
+zebra -d
+ripd -d
+vtysh
+configure terminal
+router rip
+network 192.168.0.0/24
+network 192.168.2.0/24
+exit (fois 3)
+
+R3:
+zebra -d
+ripd -d
+vtysh
+configure terminal
+router rip
+network 192.168.1.0/24
+network 192.168.3.0/24
+exit (fois 3)
+
+1.
+Les addresses de destination est une addresse multicast 224.0.0.9.
+Elles sont envoyées de manière continue. Elle ne s'arrêtent pas, 
+il y a toujours des paquets de type RIPv2 qiu traversent le traffic.
+
+2.
+Non. Chaque routeur va en fait envoyer une demande(request) sur l'adresse multicast
+dans l'attente de de recevoir une réponse de chaque autre routeur.
+Ces réponses contiennent les réseaux auxquels les autres routeurs sont connectés ainsi que la métrique nécessaire pour joindre le réseau.
+
+Non car R1 possède une interface qui est déjà connecté au réseau 'a' (=> eth0). 
+Le protocole RIP sert à découvrir et donc à recevoir les routes des table de routables des autres routeurs. 
+Et donc comme R1 possède déjà la route pour le réseau 'a' dans sa table de routage, le protocole n'informe pas R1 du réseau 'a'.
+
+Par contre R1 informe à R2 tous les réseaux auxquel R1 est connecté et pas R2. 
+En gros, Tous les réseaux auxquels R1 est connecté sauf le réseau auquel R1 et R2 sont connecté sont envoyés à R2 de la part d'R1.
+
+Sur l'image Question_4_2.png, on peut voir le paquet qu'envoit l'interface eth0 de R1 à l'interface eth0 de R2
+le réseau auquel R1 est aussi connecté (192.168.1.0) avec une métrique de '1'.
+
+3.
+Quelle est la métrique associée au réseau A dans les annonces de R2?
+Elle est de '1'.
+Quelle est la métrique associée au réseau A dans les annonces de R1?
+Elle est de '2'.
+Selon vous, quelle est la métrique associée au réseau A dans les annonces de R3?
+Selon moi, elle corresponds à '3'. La métrique est égale à 1 lorsque le réseau auquel on a envie d'acceder est directement connecté au routeur.
+A chaque passage d'un autre routeur, cette métrique est incrémenté de 1. Donc eth1 de R3 dira que le réseau 'A' est accessible avec une métrique de '3'.
+
+
+4.
+(voir l'image Question_4_4.png)
+La métrique serait de '1'.
+La métrique est égale à 1 lorsque le réseau auquel on a envie d'acceder est directement connecté au routeur.
+A chaque passage d'un autre routeur, cette métrique est incrémenté de 1. Donc eth1 de R3 dira que le réseau 'A' est accessible avec une métrique de '1' seulemnt si R3 est connecté par un réseau commun entre R2 et R3.
+
+5.
+Sur R2:
+ip link set eth1 down
+
+Les paquets venant de R2 vers R1 ont une métrique de '16'.
+'16' représente le nombre maximum de 'hops' pour accèder au réseau en question.
+Il a fallu ~6 secondes pour que le premier paquet de eth1 de R1 vers l'adresse multicast informe que le réseau 'A' à une métrique de '16'.
+(http://idum.fr/spip.php?article213)
+
+6.
+('Activez de nouveau eth1 sur R2 et désactivez cette fois eth0...')
+Sur R2:
+ip link set eth0 down
+
+(voir l'image Question_4_6.png)
+C'est après 175 secondes que l'interface eth1 de R1 averti R3 que le routeur R2 n'est plus accessible.
+le dernier paquet envoyé par R2 à R1 à été envoyé a la 184eme seconde et R1 averti R3 que le réseau A est désormais disponible avec une metrique de '16'
+à partir de la 359ème seconde.
+
+7.
+(voir l'image question_4_7.png)
+
+vstart -D PIRATE --eth0=A 
+
+dans /etc/network/interfaces de PIRATE:
+auto eth0
+iface eth0 inet static
+address 192.168.2.254
+netmask 255.255.255.0
+
+redémarrer le service networking:
+'/etc/init.d/networking restart'
+
+ifconfig dummy0:0 192.168.3.254 up
+
+
+R1:
+zebra -d
+ripd -d
+vtysh
+configure terminal
+router rip
+network 192.168.0.0/24
+network 192.168.1.0/24
+exit (fois 3)
+
+
+R2:
+zebra -d
+ripd -d
+vtysh
+configure terminal
+router rip
+network 192.168.0.0/24
+network 192.168.2.0/24
+exit (fois 3)
+
+R3:
+zebra -d
+ripd -d
+vtysh
+configure terminal
+router rip
+network 192.168.1.0/24
+network 192.168.3.0/24
+exit (fois 3)
+
+PIRATE:
+zebra -d
+ripd -d
+vtysh
+configure terminal
+router rip
+network 192.168.2.0/24
+network 192.168.3.0/24
+exit (fois 3)
+
+(table de routage de R2, voir l'image Question4_7.png)
+De R2 pour aller au réseau B, il continue par passer par R1 puis par R3, au lieu d'aller par PIRATE pour directement y accéder.
+Ce qui donne une métrique de 3 au lieu de 2.
+En fait, même après avoir crée une interface fictive dummy0, rip ne reconnais pas cette interface. 
+Meme en fesant un ping de R2 vers l'interface dummy0, le ping ne fonctionnera pas.
+
+
+
+
+
+Partie 5
+
+
+

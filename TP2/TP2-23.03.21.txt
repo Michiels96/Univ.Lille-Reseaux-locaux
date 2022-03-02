@@ -1,0 +1,637 @@
+
+NB: Les images sont clésses dans leur dossier respectif dans le dossier screens/.
+
+(keyboard shortcuts for Cisco IOS CLI: https://etherealmind.com/cisco-ios-cli-shortcuts/?doing_wp_cron=1616685179.6183209419250488281250)
+Pour redémarrer un switch cisco, commande 'reload'
+
+Partie 1
+(config IP Partie_1_Q1-2.png)
+1.
+PC-A => 192.168.1.1
+PC-B => 192.168.1.2
+PC-C => 192.168.1.3
+
+Cliquer sur le switch et aller dans l'onglet 'CLI'
+Taper la commande exit jusqu'au moment où j'ai 'Switch#' au prompt.
+Taper ensuite 'show mac-address-table'
+(voir le contenu l'image Partie_1_Q1.1.png)
+
+Pour envoyer un ping avec un nbr infini de paquets à envoyer vers 192.168.1.1: 
+ping -t 192.168.1.1
+
+Pour sniffer avec wireshark, ajouter un appareil sniffer entre le PC-C et le switch.
+
+Sur Pc-A, exécuter au command promt: 'ping -t 192.168.1.2'
+Sur le sniffer aller dans l'onglet 'GUI' et cliquer sur address filter pour eviter la pollution de protocole inutile.
+Seul ICMP nous intéresse pour le moment.
+"Lancez une capture de trames sur C avec wireshark. C reçoit-il les messages ICMP envoyés en unicast de A vers B?"
+=> Non
+
+Juste après avoir déconecté B, la table MAC du switch voir l'image Partie_1_Q1.2.png.
+Sur PC-A, au terminal, à chaque fois qu'une nouvelle ligne 'Request timed out' apparait, un message ICMP est envoyé sur tous les ports du switch, sauf sur le port de l'envoyeur (PC-A).
+On remarque que le sniffer à intercepté un message ICMP sur la route du switch vers C et que forcément
+(vu dans l'en-tete IP, la destination est 192.168.1.2), PC-C l'aurait rejeté car c'est pas son IP.
+Donc le switch envois à tous les ports après avoir déconnecté le PC-B.
+
+
+2.
+(Tuto pour retrouver les commandes CLI d'un switch: https://www.computernetworkingnotes.com/ccna-study-guide/basic-switch-configuration-guide-with-examples.html)
+Le CLI possède plusieurs modes et chaque mode à ses propres commandes. Pour obtenir les commandes d'un mode, taper la commande '?'
+
+MAC address de A:
+00d0.5801.338d 
+MAC address de B: 
+0002.16B4.4479
+MAC address de C: 
+0000.0C76.7458
+
+Après avoir changé l'addr MAC de C avec celle de B, lors du pre"mier ping de A vers B, la table ARP du switch contient 2 entrées; une ligne pour accèder au PC-A 
+(sur le port Fa0/1) et l'autre ligne pour accèder au PC-B (sur le port Fa0/2).
+Quand je ping ensuite du PC-A vers le PC-C, dans la table arp du switch, il n'y a toujours que 2 lignes, sauf que cette fois-ci, concernant la MAC address 0002.16B4.4479,
+il n'est plus sur le port Fa0/2 mais sur le port Fa0/3.
+(voir les images Partie_1_Q2.1.png et Partie_1_Q2.2.png)
+Sur l'image Partie_1_Q2.3.png, on peut voir, après avoir ping simultanément sur PC-B et PC-C 2 correspondances dans la table ARP du PC-A.
+
+Ajouter 2 entrées statiques sur le switch: (il faut être en mode 'Switch(config)>', pour cela, taper 'config terminal')
+mac address-table static 0002.16B4.4479 vlan 1 interface Fa0/4
+mac address-table static 0002.16B4.4479 vlan 1 interface Fa0/5
+
+(voir l'image Partie_1_Q2.4.png)
+Je constate que la colonne TYPE dans la table ARP contient les champs static pour les commandes entrées précédamment.
+Je constate aussi que la table ARP du switch ne peut avoir la meme adresse MAC pour plusieurs lignes (donc sur plusieurs ports).
+
+
+3.
+(config IP Partie_1_Q3.png)
+
+(voir images Partie_1_Q3.1.png et Partie_1_Q3.2.png)
+Il y a 3 tuples dans la table ARP conernant le port Fa0/1 qui est le lien connecté au switch1.
+Conclusion: on peut avoir dans une table ARP, plusieurs tuples pour un même port.
+
+
+
+Partie 2
+
+Pour limiter le nbr d'addr MAC à un seul: (https://cisco.goffinet.org/ccna/ethernet/switchport-port-security-cisco-ios/)
+
+Aller dans le mode 'switch(config-if)' (depuis switch(config) on tape 'interface <port du switch>')
+Donc 'interface Fa0/1'
+puis 'switchport mode access'
+puis 'switchport port-security'
+puis 'switchport port-security maximum 1'
+
+(voir résulat après un show port-security image Partie_2_Q1.1.png)
+> ping de PC-C vers PC-A => ping 192.168.1.1
+
+Résultat table ARP du switch et résultats avant/après ping voir l'image Partie_2_Q1.2.png.
+
+> connexion PC-A sur un autre port que Fa0/1 (ex. Fa0/4)
+> ping depuis PC-C => ping 192.168.1.1
+Le ping réussit (table ARP du switch, voir l'image Partie_2_Q1.3.png)
+
+> connexion PC-B sur port Fa0/1
+> depuis PC-C, pinger PC-B => ping 192.168.1.2
+Le ping réussit (table ARP du switch, voir l'image Partie_2_Q1.4.png)
+
+Mode sticky:
+> remettre la config de bas, cad. PC-A sur Fa0/1 et PC-B sur Fa0/2. 
+Configurer les étapes précédentes:
+'interface Fa0/1'
+puis 'switchport mode access'
+puis 'switchport port-security'
+puis 'switchport port-security maximum 1'
+Avec en plus 'switchport port-security mac-address 00d0.5801.338d' où '00d0.5801.338d' est l'adresse MAC de PC-A.
+> ping depuis PC-C vers PC-A => ping 192.168.1.1
+Le ping réussit (table ARP du switch, voir l'image Partie_2_Q1.5.png)
+
+> connexion PC-B sur port Fa0/1
+> depuis PC-C, pinger PC-B => ping 192.168.1.2
+Le ping n'a pas réussit et le lient entre le switch et PC-B est mort (down) (voir l'image Partie_2_Q1.6.png)
+En fait, dans le résultat de la commande show port-security, n peut voir l'action qui seraz réalisée si on tente de connecter
+un pc avec une addresse MAC différente. On 'shutdown' le port. Et c'est ce qui est arrivé.
+Comme le PC-B à une addresse différente et qu'on a enregistré la veille comme quoi seul l'a machine avec l'addr MAC '00d0.5801.338d'
+peut se connecter au port Fa0/1 du switch1, on a simplement refusé la connexion car l'addr MAC est différente.
+
+
+
+
+(table MAC address de switch1 voir l'image Partie_2_Q1.1.png)
+(Je ping PC-A depuis PC-C)
+> déconnexion PC-A puis reconnexion sur un autre port du switch1 (par exemple, port Fa0/4)
+> ping PC-C vers PC-a => ping 192.168.1.1
+
+Après avoir changé le port du switch Fa0/1 connecté à PC-A au port Fa0/4, le résulat du ping du PC-C vers PC-A fonctionnne toujours (voir l'aimge Partie_2_Q1.2.png).
+show port-security, n'affiche rien de spécial.
+> connecion de PC-B au port sécurisé Fa0/1
+
+Même résultat que pour pinger B (voir l'image Partie_2_Q1.3.png)
+Le switch, a juste changé dans sa table ARP l'adresse mac de PC-A avec celui du PC-B pour le port Fa0/1.
+show port-security n'affiche non plus rien.
+
+
+2.
+MAC address de A:
+00d0.5801.338d 
+MAC address de B: 
+0002.16B4.4479
+MAC address de C: 
+0000.0C76.7458
+
+> ping 192.168.1.2 depuis PC-C
+Le ping refonctionne. C'est dangereux d'utiliser cette technique pour être sur des pc qui se connectent, car il reste facile de changer sa propre MAC addr.
+
+Dans le logiciel Cicso packet tracer, J'essaye avec les switches 2950T-24 et Switch-PT (jusqu'à avant, j'ai travaillé avec le switch 2960-24TT)
+
+Pour le switch 2950T-24:
+refaire les commandes précédentes:
+'interface Fa0/1'
+puis 'switchport mode access'
+puis 'switchport port-security'
+puis 'switchport port-security maximum 1'
+puis 'switchport port-security mac-address 00d0.5801.338d'
+etc.
+
+> ping 192.168.1.1 depuis PC-C
+Le ping réussit (table ARP du switch, voir l'image Partie_2_Q2.1.png)
+
+> connecter PC-A vers un autre port et connecter PC-B au port sécurisé Fa0/1
+> ping 192.168.1.2 depuis PC-C
+Comme pour le premier switch, le ping ne fonctionne pas pour les memes raisons (voir l'image Partie_2_Q2.2.png)
+
+J'ai fait les mêmes manipulations pour le switch Switch-PT et c'est encore une fois le même résultat.
+
+3.
+(voir l'image Partie_2_Q3.1.png)
+Pour effectuer les changements sur plusieurs ports du switch à la fois, il suffit de faires les commandes indiquées sur l'image et de séparer par un '/' leur noms d'interface
+(partie gras sur l'image)
+Dans ces commandes, on permet en plus d'aviter d'éteindre le port quand une violation à été détectée.
+
+
+
+
+Partie 3
+
+(config voir l'image Partie_3_Q1.png)
+Aller en mode 'config' = > Switch(config)# apd du CLI de chaque switch
+'enable' > 'config terminal'
+Désactivation STP
+'no spanning-tree vlan 1'
+
+1.
+Mon adresse broadcast: 192.168.1.255
+(résultat voir l'image Partie_3_Q1.1.png)
+Je remarque un spam de messages ICMP et ARP au sniffer. Je me doute qu'il existe une boucle quelque part, 
+ce qui semble logique car il y a plus d'1 chemin possible pour aller du switch1 vers le switch2 et inversément.
+
+2.
+Unicast ne produit pas de boucle car en faisant un ping du PC-A vers PC-C, le ping fonctionne correctement.
+Par contre, lorsque j'ai effectué un ping en broadcast, les switch s'envoyaient les paquets entre eux, ce qui formait une boucle. 
+Multicast, comme c'est un type de communication qui, comme le broadcast, 
+envoit les paquets à plusieurs destinations (dans ce cas ci un groupe et pas tt le monde) donc les switch s'enverront encore une fois les paquets.
+
+3.
+(statistiques voir l'image Partie_3_Q3.1.png)
+
+
+'configure terminal'
+'interface Fa0/3'
+'storm-control broadcastlevel 1000'
+J'ai choisit de mettre le filtre en place sur le port Fa0/3 du switch 1 et le port Fa0/2 sur switch2
+avec un filtre à 50 (1000 ne change rien) 
+'storm-control broadcast level 50'
+Avec 50 sur ces 2 ports, la boucle est contenue/n'existe plus entre les 2 switches et n'impactent plus les machines.
+J'ai du mettre un filtre sur un 2eme port (Fa0/2 du switch2) car sur 1 port uniquement cela ne suffit pas.
+Ces 2 ports sont sur la même ligne entre les 2 switch.
+
+Boucle de commutation:
+Lorsque PC-A envoit un ping en broadcast, switch1 va avoir dans sa table MAC une correspondance vers PC-A au port qui est connecté à lui (Fa0/1)
+Ensuite, comme c'est un message en broadcast, le switch1 va envoyer ce ping vers switch2 et donc switch 2 va avoir dans sa table MAC une correspondance vers PC-A sur son port 
+d'où vient le ping (cad. switch1) ensuite, comme switch 2 à une seconde route vers switch1, switch 2 va de nouveau envoyer le ping de PC-A vers switch1 via l'autre route.
+Et ainsi switch1 va mettre à jour sa table MAC en disant que la route pour aller vers PC-A n'est plus via son port Fa0/1 mais via le port Fa0/3 de switch1 qui le relie vers switch2.
+De cette façon, switch1 et switch2 vont se renvoyer le ping en modifiant à chaque fois leur table MAC avec comme route pour atteindre PC-A le port distant de l'autre switch connecté.
+
+Dans ma config. :
+Switch1:
+Fa0/1 => PC-A
+Fa0/2 => PC-B
+Fa0/3 => port Fa0/2 du switch2
+Fa0/4 => port Fa0/3 du switch2
+
+Switch2:
+Fa0/1 => PC-C
+Fa0/2 => port Fa0/3 du switch1
+Fa0/3 => port Fa0/4 du switch1
+
+
+'show storm-control Fa0/3 broadcast' permet de voir les paquets filtrés
+
+
+4.
+On risque de créer une congestion, car lors de la suppression de messages (limitation des paquets), les machines destinataires sans réponse vont continuer à envoyer des pings
+Lorsque les machines qui envoient des pings, ils s'attendent aussi à reçevoir un message de type ACK, mais comme il peut y avoir des messages supprimées, 
+ils renverront de nouveau un ping pour de nouveau tenter de reçevoir un ACK (accusé de reception). (et ainsi de suite)
+
+
+
+
+ssh -XC michiels@a16p26.fil.univ-lille1.fr
+
+Partie 4
+
+vstart -D A --eth0=a --eth1=b && vstart -D B --eth0=c --eth1=d && vstart -D S1 --eth0=a --eth1=c && vstart -D S2 --eth0=b --eth1=d
+
+Sur A :
+ip link set dev eth0 up
+ip link set dev eth1 up
+
+Sur B
+(sauf B pour éviter la boucle)
+(ip link set dev eth0 up)
+ip link set dev eth1 up
+
+Sur S1 :
+ip link set dev eth0 up
+ip link set dev eth1 up
+
+Sur S2 :
+ip link set dev eth0 up
+ip link set dev eth1 up
+
+
+Sur A :
+tcpdump -Uni eth0 -w /hosthome/A_eth0.cap &
+tcpdump -Uni eth1 -w /hosthome/A_eth1.cap &
+
+Sur B :
+tcpdump -Uni eth0 -w /hosthome/B_eth0.cap &
+tcpdump -Uni eth1 -w /hosthome/B_eth1.cap &
+
+Sur votre machine :
+tail -f ~/A_eth0.cap | wireshark -SHkli - &
+tail -f ~/A_eth1.cap | wireshark -SHkli - &
+tail -f ~/B_eth0.cap | wireshark -SHkli - &
+tail -f ~/B_eth1.cap | wireshark -SHkli - &
+
+Sur A :
+brctl addbr A
+brctl addif A eth0 eth1
+
+Sur B :
+brctl addbr B
+brctl addif B eth0 eth1
+
+Sur S1 :
+brctl addbr S1
+brctl addif S1 eth0 eth1
+
+Sur S2 :
+brctl addbr S2
+brctl addif S2 eth0 eth1
+
+Sur A :
+ip link set dev A up
+
+Sur B :
+ip link set dev B up
+
+Sur S1 :
+ip link set dev S1 up
+
+Sur S2 :
+ip link set dev S2 up
+
+Sur A :
+ip address add 192.168.1.1/24 dev A
+
+Sur B :
+ip address add 192.168.1.5/24 dev B
+
+
+Partie 5
+
+Lancez un ping en diffusion générale depuis A. Que constatez-vous?
+Plein de paquets ARP en broadcast. (voir l'image Partie_5.png)
+
+1.
+(voir Partie_5_Q1.1.png, Partie_5_Q1.2.png et Partie_5_Q1.3.png)
+Activer STP sur A :
+'brctl stp A on'
+'brctl showstp A'
+
+Le ping en broadcast ne fonctionne plus (pas de response)
+A n'a plus de reponse de la part de B mais plein de paquets STP apparaissent.
+
+2.
+'Déconnectez le lien entre S1 et B'
+Sur B :
+'ip link set dev eth0 down'
+plus rien d'es reçu par eth0 de B, ce qui est normal, par contre eth1 de breçoit toujours des paquets STP.
+(voir Partie_5_Q2.1.png)
+
+Par contre sur A, il recoit des paquets ICMP de type différent (Partie_5_Q2.2.png)
+Je remarque aussi que le port d'eth1 n'est plus 8001 mais 8002 (Partie_5_Q2.3.png)
+Je pense que le traffic n'est alors plus dirigé vers eth0 de A mais vers son interface eth1.
+
+activer STP sur B S1 et S2
+brctl stp B on
+brctl stp S1 on
+brctl stp S2 on
+
+
+3.
+Sur A et B,
+Le root bridge change de valeur et reste sur 6a:89:de:97:32:99 qui est l'adresse MAC de B.
+Le root path change de valeur quand il a son root bridge qui à une addresse MAC différente de la machine qu'on surveille.
+Ce champ indique juste combien de switches dois t'on traverser pour attenindre le switch racine (=> dont d'addr MAC de cette machine est égale au champ root bridge). 
+L'addr MAC choisie dans le champ root bridge correspond à la mpachine avec la + petite priorité, puis si 2 machines ont la même priorité, on élis en fonction de leur addr mac.
+
+4.
+Sur S1 :
+'brctl showstp S1'
+Sur S2 :
+'brctl showstp S2'
+(voir Partie_5_Q4.1.png)
+
+S1 et S2 ont le même designated root (Partie_5_Q4.1.png)
+
+6a:89:de:97:32:99 est l'addr MAC de B car c'est lui qui à la plus petite addr MAC du réseau.
+Sur chaque pont non racine, on choisis le port qui à le chemin le + courst vers le pont racine.
+
+Sur A:
+eth0: port root
+eth1: port bloqué
+Sur S1:
+eth0: port désigné
+eth1: port root
+sur B: 
+eth0: port désigné
+eth1: port désigné
+sur S2:
+eth0: port désigné
+eth1: port root
+
+Après un ping en broadcast àpd A il n'y a plus de broadcast storm.
+
+5.
+Changer d'addr MAC est facile, c'est pq on peut facilement se désigner comme pont root en changant son addr MAC et en ayant la + priorité possible.
+
+'ip link set dev A address 2a:72:de:96:31:99'
+Pour que A devienne le nouveau pont racine, il faut changer son addr MAC.
+(Partie_5_Q5.1.png)
+
+6.
+changer la vitesse entre A et S1:
+sur A:
+'setpathcost A eth0 50' (le past cost est à 100 donc je divise par 2)
+sur S1: 
+'setpathcost S1 eth0 50' (le past cost est à 100 donc je divise par 2)
+
+
+Le root path cost n'a pas changé (reste à 0)
+par contr pour S1, le root path cost augemente jusqu'à 2.
+
+Pour la réponse de B vers A, les données sortent de l'interface eth1 de B puis passent par S2 pour arriver ensuite à A.
+sur A:
+'setpathcost A eth0 50' 
+sur S1:
+'setpathcost S1 eth0 50' 
+
+7.
+B va envoyer un paquet de type 'Topology change notification' à tous ses voisins.
+L'interface eth0 de B passe de l'état listening à learning puis à forwarding.
+Et le lien entre B et A va passer maintenant par S1. 
+
+8.
+STP permet d'éviter des boucles de commutation
+
+9.
+Il serait utile de garder une route de secours lorsque la route principale ne fonctionne plus, 
+c'est pour ça que des routes secondaires doivent exister au cas où la route principale ne pourrait plus être utilisée.
+
+10.
+STP permet d'éviter des boucles de commutation
+ou du moins utiliser des boucles pour en choisir qu'une seule route et utiliser une autre au cas ou une panne surviendrait.
+
+Le fait d'élire un pont racine permet aussi de raccourcir les routes entre plusieurs appareils.
+En effet, en équilibrant les switches connectées entre 2 machines, le pont racine devrait se situer idéalement au milieu de ces 2 machines (avec des switches entre eux).
+
+
+
+Partie 7
+(Cisco packet tracer)
+
+addr MAC:
+PC-A: 
+00D0.5801.338D
+PC-B:
+0002.16B4.4479
+PC-C:
+0000.0C76.7458
+PC-D:
+0060.3E9A.1EDD
+
+
+
+1.
+Pour créer les vlans:
+
+Dans switch1, aller dans l'onglet CLI
+Switch#vlan database
+Switch(vlan)#vlan 2 name atelier
+Switch(vlan)#vlan 3 name direction
+
+pour affecter une interface à un vlan :
+Switch#config terminal
+Switch(config)#interface FastEthernet0/1
+Switch(config-if)#switchport access vlan 2
+
+Pour FastEthernet0/1 et FastEthernet0/2:
+switchport access vlan 2
+
+Pour FastEthernet0/3 et FastEthernet0/4:
+switchport access vlan 3
+
+Qui reçoit un ping en diffusion générale émis par A?
+(voir Partie_7_Q1.1.png)
+C'est seulement le PC-B qui reçoit le ping car il est connecté au même réseau VLAN que PC-A 
+
+Qui reçoit un ping en diffusion générale émis par C?
+(voir Partie_7_Q1.5.png)
+C'est seulement le PC-D qui reçoit le ping car il est connecté au même réseau VLAN que PC-C 
+
+
+2.
+(table voir Partie_7_Q2.1.png)
+Cela permet la configuration de réseaux différents sur un même switch.
+Avantages:
+- la réduction des domaines de broadcast 
+- l'accroissement de la sécurité (si des filtres sont mis en place pour la communication entre les réseaux).
+
+
+3.
+(nouvelle config, voir Partie_7_Q3.png)
+PC-A et PC-B sur VLAN 2
+PC-C et PC-D sur VLAN 3
+
+1) créer les vlans sur les 2 switches
+2) créer un cable entre les 2 switches, ou chaque extrémité est connecté sur le port Fa0/5
+3) associer PC-A et PC-B sur le VLAN2
+4) associer PC-C et PC-D sur le VLAN3
+
+J'ai remarqué que mettre seulement une connexion entre les 2 switches ET assigner cette connexion aux vlans 2 et 3 ne fonctionne pas
+Il ne peut y avoir qu'un vlan pas connexion/port du switch.
+Il est donc nécessaire de créer 2 routes entre switch1 et switch2 où
+S1-Fa0/5 <-VLAN2-> S2-Fa0/5
+S1-Fa0/6 <-VLAN3-> S2-Fa0/6
+
+(résultat voir Partie_7_Q3.1.png)
+
+
+
+
+
+Partie 8
+
+
+1.
+(Il n'y a plus 2 routes entre les 2 switches)
+https://www.ciscomadesimple.be/2010/07/08/configuration-dun-trunk-entre-deux-switch/
+
+Configuration du trunk sur S1-Fa0/5
+S1(config-if)#switchport mode trunk
+
+Configuration du trunk sur S2-Fa0/5
+S2(config-if)#switchport mode trunk
+
+2.
+(voir Partie_8_Q2.1.png et Partie_8_Q2.2.png)
+C'est dans le champ TCI qu'on peut voir sur quel VLAN circulent/ont comme destination les paquets
+
+3.
+http://www-igm.univ-mlv.fr/~dr/XPOSE2007/vlanparlegrandquinapascomprislesconsignes/8021QTrame.html
+
+VLAN ID sur 12 bits donc 4096 VLANS possibles
+
+4.
+https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/lanswitch/configuration/xe-3se/3850/lnsw-ieee-8021q-tunneling.html
+
+Le switch que j'utilise 2960 utilise deja le protocole IEEE 802.1Q
+
+
+5.
+Utilisez la commande switchport trunk pour indiquer aux switches S1 et S2 que le VLAN2 est leVLAN natif
+voir
+https://www.cisco.com/c/m/en_us/techdoc/dc/reference/cli/nxos/commands/l2/switchport-trunk-native-vlan.html
+(au lieu de 'interface vethernet 1', mettre 'interface FastEthernet0/5')
+
+Apres avoir mis Sur S1 et S2 le vlan 2 en natif, les paquets échangées entre PC-A et PC-B | PC-C et PC-D les données sont tjrs les memes par rapport aux captures précédents.
+Avec un ping en broadcast, les vlans 2 et 3 sont tjrs bien isolés l'un de l'autre. (ex: Pas de possibilité de pinger PC-A vers PC-C ou PC-D)
+
+Le vlan natif, est le vlan dans lequel sont véhiculées les trames non taguées dot1q. Donc si un switch reçoit sur une interface trunk une trame ethernet standard, il la placera dans ce vlan natif, en quelque sorte, un vlan par défaut (de marquage).
+Sur les équipements Cisco, certains protocoles comme CDP ou DTP sont véhiculés dans des trames non taguées et donc dans le vlan natif.
+(https://www.ciscomadesimple.be/2014/03/20/trunk-dot1q-et-vlan-natif/comment-page-1/)
+A cause de cette explication, un seul vlan natif sert à véhiculer les paquets qui n'ont pas de tags dot1q
+En tentant l'expérience j'obtiens un NATIVE_VLAN_MISMATCH dans la console.
+
+
+6.
+(voir Partie_8_Q6.1.png)
+Avec le ping en broadcast depuis PC-C, Il y a plein plus de paquets STP
+Le trunk n'envois plus de messages vers le vlan 3.
+
+
+7.
+DTP pour Dynamic Trunking Procotol, c’est un protocole propriétaire Cisco donc ne fonctionne qu’entre switchs Cisco
+
+Le principe est très simple, lorsqu’un port est monté, des annonces DTP sont envoyées;
+
+    si le port est connecté à un switch voisin, ce dernier va recevoir l’annonce DTP et y répondre. Des deux côtés, l’activation du Trunk s’effectue;
+    si le port est connecté à un pc, ce dernier ne répondra pas à l’annonce car il comprend pas le protocole. Sur le port du switch, le Trunk n’est pas activé et donc reste en mode Access.
+
+(voir https://reussirsonccna.fr/dtp-ou-comment-monter-un-trunk-automatiquement/)
+
+
+
+
+
+Partie 9
+
+You can analyze network traffic passing through ports by using Switched Port Analyzer (SPAN). 
+This sends a copy of the traffic to another port on the switch that has been connected to a SwitchProbe device, another Remote Monitoring (RMON)
+(https://community.cisco.com/t5/networking-documents/how-to-configure-port-monitoring-span-on-a-catalyst-2940-2950/ta-p/3132032)
+On configure le port d'un switch pour qu'il envoit une copie de ts les paquets qui passent par le switch sur ce port.
+
+
+SPAN sur Switch1:
+(Fa0/2 est le port où PC-C est connecté au switch1 et Fa0/6 est le port où le sniffer0 est connecté au switch1)
+Switch(config)#monitor session 1 source interface fa0/2 
+Switch(config)#monitor session 1 destination interface fa0/6
+
+SPAN sur Switch2:
+(Fa0/2 est le port où PC-D est connecté au switch2 et Fa0/6 est le port où le sniffer1 est connecté au switch2)
+Switch(config)#monitor session 1 source interface fa0/1
+Switch(config)#monitor session 1 destination interface fa0/6
+
+
+Avec un ping de PC-C à PC-D les paquets sont bien copiés et transmis aux sniffers.
+(voir Partie_9_Q1.1.png)
+
+
+
+Partie 10
+
+
+1.
+Sur Switch1:
+Switch(config)#vtp mode server
+
+Sur Switch2:
+Switch(config)#vtp mode client
+
+(liste des vlans sur switch1 voir Partie_10_Q1.1.png)
+
+Le trunk transfert les paquets vers le vlan 3
+Quand je crée un nouveau vlan sur S2 j'ai l'erreur 
+'Apply not allowed when device is in CLIENT state.'
+(voir Partie_10_Q1.2.png)
+
+
+
+2.
+Le problème pourrait être que les nouveaux switch qui s'y connectent après un changement statyique d'un switch client vers un switch serveur, 
+Ils pourraient s'auto proclamer sereur à leur tour.
+
+4.
+D'autres switch non-cisco ne pourraient pas bénéficier du protocole VTP.
+
+
+
+Partie 11
+
+Router Fa0/0 réseau partie gauche sur schéma: 10.0.0.254/24
+Router Fa0/0 réseau partie gauche sur schéma: 10.0.1.254/24
+
+IP PC-A:
+10.0.0.1
+IP PC-B: 
+10.0.1.2
+IP PC-C:
+10.0.0.3
+IP PC-D:
+10.0.1.4
+
+config voir Partie_11_Q1.png
+
+J'ai un problème lorsque je veux indiquer une route statique pour ateindre l'autre réseau
+(voir Partie_11_Q1.1.png)
+
+
+
+
+
+
+
+
+
+
+
